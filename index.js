@@ -1,20 +1,13 @@
-// @ts-nocheck
-
 import { connect } from "cloudflare:sockets";
 import init, { processVlessHeader } from "./pkg/zr_wasm.js";
 import wasm from "./pkg/zr_wasm_bg.wasm";
 
 const decodeSecure = (encoded) => atob(encoded);
-const HTML_URL = "https://nscl5.github.io/zr";
+const HTML_URL = "https://nscl5.github.io/zr/";
 
 const Config = {
   userID: "be0ff9df-1468-41a0-8865-796d1c6800db",
   proxyIPs: ["nima.nscl.ir:443"],
-  scamalytics: {
-    username: "revilseptember",
-    apiKey: "b2fc368184deb3d8ac914bd776b8215fe899dd8fef69fbaba77511acfbdeca0d",
-    baseUrl: "https://api12.scamalytics.com/v3/",
-  },
 
   fromEnv(env) {
     const selectedProxyIP =
@@ -26,11 +19,6 @@ const Config = {
       proxyIP: proxyHost,
       proxyPort: proxyPort,
       proxyAddress: selectedProxyIP,
-      scamalytics: {
-        username: env.SCAMALYTICS_USERNAME || this.scamalytics.username,
-        apiKey: env.SCAMALYTICS_API_KEY || this.scamalytics.apiKey,
-        baseUrl: env.SCAMALYTICS_BASEURL || this.scamalytics.baseUrl,
-      },
     };
   },
 };
@@ -116,14 +104,42 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
   const mainDomains = [
     hostName, "creativecommons.org", "www.speedtest.net", "sky.rethinkdns.com",
     "chat.openai.com", "go.inmobi.com", "singapore.com",
-    "www.wto.org", "chatgpt.com", "codepen.io", "medium.com", "npmjs.com",
-    "nodejs.org", "jsdelivr.com", "csgo.com", "harbor.io", "linkerd.io", "fbi.gov", "zula.ir"
+    "www.visa.com", "www.wto.org", "chatgpt.com", "medium.com", "npmjs.com",
+    "nodejs.org", "csgo.com", "harbor.io", "linkerd.io", "fbi.gov", "zula.ir"
   ];
 
   const httpsPorts = [443, 8443, 2053, 2083, 2087, 2096];
   const httpPorts = [80, 8080, 8880, 2052, 2082, 2086, 2095];
   let links = [];
   const isPagesDeployment = hostName.endsWith(".pages.dev");
+
+  const customIpsParam = url.searchParams.get("clean_ips");
+  if (customIpsParam) {
+    const customIps = customIpsParam.split(",").map(x => x.trim()).filter(Boolean);
+    customIps.forEach((ip, i) => {
+      let host = ip;
+      let portTls = pick(httpsPorts);
+      let portTcp = pick(httpPorts);
+      
+      if (ip.includes(":") && !ip.startsWith("[")) {
+        const parts = ip.split(":");
+        host = parts[0];
+        portTls = parseInt(parts[1], 10) || portTls;
+        portTcp = parseInt(parts[1], 10) || portTcp;
+      } else if (ip.startsWith("[") && ip.includes("]:")) {
+        const parts = ip.split("]:");
+        host = parts[0] + "]";
+        portTls = parseInt(parts[1], 10) || portTls;
+        portTcp = parseInt(parts[1], 10) || portTcp;
+      }
+      
+      const formattedAddress = host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+      links.push(buildLink({ core, proto: "tls", userID, hostName, address: formattedAddress, port: portTls, tag: `CustomIP${i + 1}` }));
+      if (!isPagesDeployment) {
+        links.push(buildLink({ core, proto: "tcp", userID, hostName, address: formattedAddress, port: portTcp, tag: `CustomIP${i + 1}` }));
+      }
+    });
+  }
 
   mainDomains.forEach((domain, i) => {
     links.push(buildLink({ core, proto: "tls", userID, hostName, address: domain, port: pick(httpsPorts), tag: `Domain${i + 1}` }));
@@ -396,83 +412,6 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
   return { write: (chunk) => writer.write(chunk) };
 }
 
-async function handleScamalyticsLookup(request, config) {
-  const url = new URL(request.url);
-  const ipToLookup = url.searchParams.get("ip");
-  if (!ipToLookup) return new Response(JSON.stringify({ error: "Missing IP" }), { status: 400, headers: { "Content-Type": "application/json" } });
-
-  const headers = new Headers({ "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
-
-  try {
-    const ipRes = await safeFetch(`http://ip-api.com/json/${ipToLookup}?fields=status,country,countryCode,city,isp,hosting`);
-    if (!ipRes.ok) throw new Error("IP lookup failed");
-    
-    const ipData = await ipRes.json();
-    if (ipData.status !== "success") throw new Error("IP data unsuccessful");
-
-    const isp = ipData.isp || "Unknown ISP";
-    const city = ipData.city || "Unknown City";
-    const countryCode = ipData.countryCode || "US";
-    
-    const dcKeywords = [
-      "hosting", "datacenter", "server", "cloud", "hetzner", "digitalocean", 
-      "ovh", "linode", "amazon", "aws", "google", "microsoft", "azure", 
-      "leaseweb", "vultr", "contabo", "datacamp", "choopa", "fastly",
-      "cloudflare", "zenlayer", "colocation", "quadranet", "i3d", "scaleway",
-      "arvancloud", "derak"
-    ];
-    const ispLower = isp.toLowerCase();
-    const isDatacenter = ipData.hosting || dcKeywords.some(keyword => ispLower.includes(keyword));
-
-    const ipHash = ipToLookup.split('.').reduce((acc, byte) => acc + parseInt(byte || 0, 10), 0) % 20;
-    
-    let score = 0;
-    let risk = "low";
-
-    if (isDatacenter) {
-      score = 65 + ipHash; 
-      risk = score > 75 ? "very high" : "high";
-    } else {
-      score = 5 + (ipHash % 15); 
-      risk = "low";
-    }
-
-    const emulatedResponse = {
-      scamalytics: {
-        status: "ok",
-        ip: ipToLookup,
-        scamalytics_isp: isp,
-        scamalytics_score: score,
-        scamalytics_risk: risk
-      },
-      external_datasources: {
-        ipinfo: {
-          as_name: isp,
-          ip_country_name: countryCode,
-          ip_country_code: countryCode
-        },
-        maxmind_geolite2: {
-          ip_city: city
-        }
-      }
-    };
-
-    return new Response(JSON.stringify(emulatedResponse), { headers });
-  } catch (error) {
-    const fallbackResponse = {
-      scamalytics: {
-        status: "ok",
-        ip: ipToLookup,
-        scamalytics_isp: "Unknown ISP",
-        scamalytics_score: 15,
-        scamalytics_risk: "low"
-      },
-      external_datasources: {}
-    };
-    return new Response(JSON.stringify(fallbackResponse), { headers });
-  }
-}
-
 async function handleConfigPage(userID, hostName, proxyAddress) {
   const dream = buildLink({ core: "xray", proto: "tls", userID, hostName, address: hostName, port: 443, tag: `${hostName}-Xray` });
   const freedom = buildLink({ core: "sb", proto: "tls", userID, hostName, address: hostName, port: 443, tag: `${hostName}-Singbox` });
@@ -518,7 +457,6 @@ export default {
         return ProtocolOverWSHandler(request, requestConfig);
       }
 
-      if (url.pathname === "/scamalytics-lookup") return handleScamalyticsLookup(request, cfg);
       if (url.pathname.startsWith(`/xray/${cfg.userID}`)) return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx);
       if (url.pathname.startsWith(`/sb/${cfg.userID}`)) return handleIpSubscription(request, "sb", cfg.userID, url.hostname, ctx);
       if (url.pathname.startsWith(`/${cfg.userID}`)) return handleConfigPage(cfg.userID, url.hostname, cfg.proxyAddress);
