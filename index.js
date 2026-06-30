@@ -3,7 +3,7 @@ import init, { processVlessHeader } from "./pkg/zr_wasm.js";
 import wasm from "./pkg/zr_wasm_bg.wasm";
 
 const decodeSecure = (encoded) => atob(encoded);
-const HTML_URL = "https://nscl5.github.io/zr";
+const HTML_URL = "https://nirevil.github.io/zizifn/";
 
 const Config = {
   userID: "be0ff9df-1468-41a0-8865-796d1c6800db",
@@ -359,59 +359,6 @@ function safeCloseWebSocket(socket) {
   }
 }
 
-async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
-  let isHeaderSent = false;
-  const transformStream = new TransformStream({
-    transform(chunk, controller) {
-      for (let index = 0; index < chunk.byteLength; ) {
-        const lengthBuffer = chunk.slice(index, index + 2);
-        const udpPacketLength = new DataView(lengthBuffer).getUint16(0);
-        const udpData = new Uint8Array(chunk.slice(index + 2, index + 2 + udpPacketLength));
-        index = index + 2 + udpPacketLength;
-        controller.enqueue(udpData);
-      }
-    },
-  });
-
-  transformStream.readable
-    .pipeTo(
-      new WritableStream({
-        async write(chunk) {
-          try {
-            const resp = await safeFetch(`https://1.1.1.1/dns-query`, {
-              method: "POST",
-              headers: { "content-type": "application/dns-message" },
-              body: chunk,
-            }, 3000);
-            const dnsQueryResult = await resp.arrayBuffer();
-            const udpSize = dnsQueryResult.byteLength;
-            const udpSizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
-
-            if (webSocket.readyState === CONST.WS_READY_STATE_OPEN) {
-              if (isHeaderSent) {
-                const combined = new Uint8Array(2 + udpSize);
-                combined.set(udpSizeBuffer, 0);
-                combined.set(new Uint8Array(dnsQueryResult), 2);
-                webSocket.send(combined.buffer);
-              } else {
-                const combined = new Uint8Array(vlessResponseHeader.length + 2 + udpSize);
-                combined.set(vlessResponseHeader, 0);
-                combined.set(udpSizeBuffer, vlessResponseHeader.length);
-                combined.set(new Uint8Array(dnsQueryResult), vlessResponseHeader.length + 2);
-                webSocket.send(combined.buffer);
-                isHeaderSent = true;
-              }
-            }
-          } catch (error) { log("DNS query error: " + error); }
-        },
-      }),
-    )
-    .catch((e) => log("DNS stream error: " + e));
-
-  const writer = transformStream.writable.getWriter();
-  return { write: (chunk) => writer.write(chunk) };
-}
-
 async function handleConfigPage(userID, hostName, proxyAddress) {
   const dream = buildLink({ core: "xray", proto: "tls", userID, hostName, address: hostName, port: 443, tag: `${hostName}-Xray` });
   const freedom = buildLink({ core: "sb", proto: "tls", userID, hostName, address: hostName, port: 443, tag: `${hostName}-Singbox` });
@@ -441,7 +388,11 @@ async function handleConfigPage(userID, hostName, proxyAddress) {
     const geoRes = await safeFetch(`https://freeipapi.com/api/json/${proxyIp}`, {}, 3000);
     if (geoRes.ok) {
       const geoData = await geoRes.json();
-      proxyLocation = [geoData.cityName, geoData.countryName].filter(Boolean).join(", ") || "Germany";
+      const countryCode = geoData.countryCode ? geoData.countryCode.toLowerCase() : "de";
+      const flagHtml = `<img src="https://flagcdn.com/w20/${countryCode}.png" alt="${countryCode}" class="country-flag"> `;
+      const locationText = [geoData.cityName, geoData.countryName].filter(Boolean).join(", ") || "Germany";
+      
+      proxyLocation = flagHtml + locationText;
       proxyIsp = geoData.asName || "Global Connectivity Solutions LLP";
     }
   } catch (e) { console.error("Server IP Geolocation failed", e); }
@@ -485,6 +436,23 @@ export default {
           proxyPort: cfg.proxyPort,
         };
         return ProtocolOverWSHandler(request, requestConfig);
+      }
+
+      if (url.pathname === "/ip-lookup") {
+        const ip = url.searchParams.get("ip");
+        if (!ip) return new Response("Missing IP", { status: 400 });
+        try {
+          const res = await safeFetch(`https://freeipapi.com/api/json/${ip}`, {}, 4000);
+          const data = await res.json();
+          return new Response(JSON.stringify(data), {
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          });
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e.message }), {
+            status: 500,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
+          });
+        }
       }
 
       if (url.pathname.startsWith(`/xray/${cfg.userID}`)) return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx);
