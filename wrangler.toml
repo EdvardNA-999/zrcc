@@ -1,6 +1,6 @@
 name = "zr-wasm"
 main = "index.js"
-compatibility_date = "2026-06-16"
+compatibility_date = "2026-04-21"
 
 [build]
 command = "wasm-pack build --target web"
