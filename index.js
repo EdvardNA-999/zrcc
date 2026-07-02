@@ -523,8 +523,12 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
 async function handleMyConnection(request) {
   const clientIP = request.headers.get("CF-Connecting-IP") || "127.0.0.1";
   const cf = request.cf || {};
+  const url = new URL(request.url);
+  let threatScore = cf.threatScore || 0;
+  if (url.searchParams.has("test_score")) {
+    threatScore = parseInt(url.searchParams.get("test_score")) || 0;
+  }
 
-  const threatScore = cf.threatScore || 0;
   let risk = "Low";
   if (threatScore > 15) risk = "Medium";
   if (threatScore > 49) risk = "High";
@@ -541,6 +545,7 @@ async function handleMyConnection(request) {
     isp: cf.asOrganization || "N/A",
     threatScore: threatScore,
     risk: risk
+    debug_has_cf_field: typeof cf.threatScore !== "undefined" ? "YES" : "NO"
   }), { headers });
 }
 
