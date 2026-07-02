@@ -520,11 +520,51 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
   return { write: (chunk) => writer.write(chunk) };
 }
 
-async function handleMyConnection(request) {
+async function handleMyConnection(request, env) {
   const clientIP = request.headers.get("CF-Connecting-IP") || "127.0.0.1";
   const cf = request.cf || {};
   const url = new URL(request.url);
+
   let threatScore = cf.threatScore || 0;
+  let isProxy = false;
+  let isHosting = false;
+
+  const isp = (cf.asOrganization || "").toLowerCase();
+  const hostingKeywords = [
+    "amazon", "google", "oracle", "microsoft", "azure", "digitalocean", "linode", "hetzner",
+    "ovh", "contabo", "vultr", "cloudflare", "akamai", "fastly", "alibaba", "tencent",
+    "choopa", "leaseweb", "m247", "packet", "equinix", "datacamp", "terrahost", "clouvider",
+    "quadranet", "reliablesite", "psychz", "sharktech", "g-core", "privex", "misaka"
+  ];
+
+  if (hostingKeywords.some(kw => isp.includes(kw))) {
+    isHosting = true;
+    threatScore = Math.max(threatScore, 20);
+  }
+
+  try {
+    const proxyCheckKey = env?.PROXYCHECK_KEY || "";
+    const proxyRes = await safeFetch(
+      `https://proxycheck.io/v2/${clientIP}?key=${proxyCheckKey}&vpn=1&asn=1`,
+      {},
+      3000
+    );
+    if (proxyRes.ok) {
+      const proxyData = await proxyRes.json();
+      if (proxyData[clientIP]) {
+        const ipData = proxyData[clientIP];
+        if (ipData.proxy === "yes") isProxy = true;
+        if (ipData.type === "hosting") isHosting = true;
+        const apiRisk = ipData.risk || 0;
+        threatScore = Math.max(threatScore, apiRisk);
+        if (isProxy) threatScore = Math.max(threatScore, 50);
+        if (isHosting) threatScore = Math.max(threatScore, 20);
+      }
+    }
+  } catch (e) {
+    console.error("ProxyCheck error:", e);
+  }
+
   if (url.searchParams.has("test_score")) {
     threatScore = parseInt(url.searchParams.get("test_score")) || 0;
   }
@@ -544,8 +584,7 @@ async function handleMyConnection(request) {
     city: cf.city || "",
     isp: cf.asOrganization || "N/A",
     threatScore: threatScore,
-    risk: risk,
-    debug_has_cf_field: typeof cf.threatScore !== "undefined" ? "YES" : "NO"
+    risk: risk
   }), { headers });
 }
 
@@ -656,7 +695,7 @@ export default {
       if (url.pathname === '/resolve-domain')
         return handleResolveDomain(request);
       if (url.pathname === '/my-connection')
-        return handleMyConnection(request);
+        return handleMyConnection(request, env);
       if (url.pathname.startsWith(`/xray/${cfg.userID}`))
         return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx);
       if (url.pathname.startsWith(`/sb/${cfg.userID}`))
