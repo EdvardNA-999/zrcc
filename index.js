@@ -544,7 +544,7 @@ async function handleMyConnection(request) {
     city: cf.city || "",
     isp: cf.asOrganization || "N/A",
     threatScore: threatScore,
-    risk: risk
+    risk: risk,
     debug_has_cf_field: typeof cf.threatScore !== "undefined" ? "YES" : "NO"
   }), { headers });
 }
