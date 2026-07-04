@@ -8,7 +8,7 @@ const HTML_URL = "https://nscl5.github.io/zr/";
 
 const Config = {
   userID: "be0ff9df-1468-41a0-8865-796d1c6800db",
-  proxyIPs: ["nima.nscl.ir:443"],
+  proxyIPs: ["di.nscl.ir:443"],
 
   fromEnv(env) {
     const selectedProxyIP =
