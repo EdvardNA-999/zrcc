@@ -138,7 +138,7 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
     total_TB: 380,
     base_GB: 42000,
     daily_growth_GB: 250,
-    expire_date: "2028-4-20",
+    expire_date: "2038-4-20",
   };
 
   const mainDomains = [
@@ -258,12 +258,12 @@ async function handleIpSubscription(request, core, userID, hostName, ctx) {
   const daily_growth_bytes = (hours_passed / 24) * (CAKE_INFO.daily_growth_GB * GB_in_bytes);
   const cake_download = base_bytes + daily_growth_bytes / 2;
   const cake_upload = base_bytes + daily_growth_bytes / 2;
-  const expire_timestamp = Math.floor(new Date(CAKE_INFO.expire_date).getTime() / 1000);
+  const expire_timestamp = Math.floor(Date.now() / 1000) + 2 * 365 * 24 * 60 * 60;
   const subInfo = `upload=${Math.round(cake_upload)}; download=${Math.round(cake_download)}; total=${total_bytes}; expire=${expire_timestamp}`;
 
   const headers = {
     "Content-Type": "text/plain;charset=utf-8",
-    "Profile-Update-Interval": "6",
+    "Profile-Update-Interval": "9",
     "Subscription-Userinfo": subInfo,
   };
   if (subName) headers["Profile-Title"] = subName;
@@ -488,7 +488,7 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
                 headers: { "content-type": "application/dns-message" },
                 body: chunk,
               },
-              3000,
+              4000,
             );
             const dnsQueryResult = await resp.arrayBuffer();
             const udpSize = dnsQueryResult.byteLength;
@@ -520,41 +520,57 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
   return { write: (chunk) => writer.write(chunk) };
 }
 
-async function handleMyConnection(request, env) {
+async function handleMyConnection(request, env, ctx) {
   const clientIP = request.headers.get("CF-Connecting-IP") || "127.0.0.1";
   const cf = request.cf || {};
+  const cache = caches.default;
+  const cacheKey = new Request(`https://risk-cache.local/${clientIP}`);
 
   let threatScore = 0;
   let risk = "Low";
 
-  try {
-    const scamalyticsRes = await safeFetch(
-      `https://api.harmonica.workers.dev/api/${clientIP}`,
-      {},
-      3000
-    );
-    if (scamalyticsRes.ok) {
-      const data = await scamalyticsRes.json();
-      if (data.success) {
-        threatScore = data.fraud_score || 0;
-        risk = data.risk.charAt(0).toUpperCase() + data.risk.slice(1);
+  const cached = await cache.match(cacheKey);
+  if (cached) {
+    const cachedData = await cached.json();
+    threatScore = cachedData.threatScore;
+    risk = cachedData.risk;
+  } else {
+    try {
+      const scamalyticsRes = await safeFetch(
+        `https://api.harmonica.workers.dev/api/${clientIP}`,
+        {},
+        4000,
+      );
+      if (scamalyticsRes.ok) {
+        const data = await scamalyticsRes.json();
+        if (data.success) {
+          threatScore = data.fraud_score || 0;
+          risk = data.risk.charAt(0).toUpperCase() + data.risk.slice(1);
+        }
       }
-    }
-  } catch (e) {}
+      const cacheResponse = new Response(JSON.stringify({ threatScore, risk }), {
+        headers: { "Cache-Control": "public, max-age=8600" },
+      });
+      ctx.waitUntil(cache.put(cacheKey, cacheResponse));
+    } catch (e) {}
+  }
 
   const headers = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*"
+    "Access-Control-Allow-Origin": "*",
   };
 
-  return new Response(JSON.stringify({
-    ip: clientIP,
-    country: cf.country || "N/A",
-    city: cf.city || "",
-    isp: cf.asOrganization || "N/A",
-    threatScore: threatScore,
-    risk: risk
-  }), { headers });
+  return new Response(
+    JSON.stringify({
+      ip: clientIP,
+      country: cf.country || "N/A",
+      city: cf.city || "",
+      isp: cf.asOrganization || "N/A",
+      threatScore,
+      risk,
+    }),
+    { headers },
+  );
 }
 
 async function handleResolveDomain(request) {
@@ -661,10 +677,8 @@ export default {
         return ProtocolOverWSHandler(request, requestConfig);
       }
 
-      if (url.pathname === '/resolve-domain')
-        return handleResolveDomain(request);
-      if (url.pathname === '/my-connection')
-        return handleMyConnection(request, env);
+      if (url.pathname === "/resolve-domain") return handleResolveDomain(request);
+      if (url.pathname === "/my-connection") return handleMyConnection(request, env, ctx);
       if (url.pathname.startsWith(`/xray/${cfg.userID}`))
         return handleIpSubscription(request, "xray", cfg.userID, url.hostname, ctx);
       if (url.pathname.startsWith(`/sb/${cfg.userID}`))
