@@ -523,55 +523,24 @@ async function createDnsPipeline(webSocket, vlessResponseHeader, log) {
 async function handleMyConnection(request, env) {
   const clientIP = request.headers.get("CF-Connecting-IP") || "127.0.0.1";
   const cf = request.cf || {};
-  const url = new URL(request.url);
 
-  let threatScore = cf.threatScore || 0;
-  let isProxy = false;
-  let isHosting = false;
-
-  const isp = (cf.asOrganization || "").toLowerCase();
-  const hostingKeywords = [
-    "amazon", "google", "oracle", "microsoft", "azure", "digitalocean", "linode", "hetzner",
-    "ovh", "contabo", "vultr", "cloudflare", "akamai", "fastly", "alibaba", "tencent",
-    "choopa", "leaseweb", "m247", "packet", "equinix", "datacamp", "terrahost", "clouvider",
-    "quadranet", "reliablesite", "psychz", "sharktech", "g-core", "privex", "misaka"
-  ];
-
-  if (hostingKeywords.some(kw => isp.includes(kw))) {
-    isHosting = true;
-    threatScore = Math.max(threatScore, 20);
-  }
+  let threatScore = 0;
+  let risk = "Low";
 
   try {
-    const proxyCheckKey = env?.PROXYCHECK_KEY || "";
-    const proxyRes = await safeFetch(
-      `https://proxycheck.io/v2/${clientIP}?key=${proxyCheckKey}&vpn=1&asn=1`,
+    const scamalyticsRes = await safeFetch(
+      `https://api.harmonica.workers.dev/api/${clientIP}`,
       {},
       3000
     );
-    if (proxyRes.ok) {
-      const proxyData = await proxyRes.json();
-      if (proxyData[clientIP]) {
-        const ipData = proxyData[clientIP];
-        if (ipData.proxy === "yes") isProxy = true;
-        if (ipData.type === "hosting") isHosting = true;
-        const apiRisk = ipData.risk || 0;
-        threatScore = Math.max(threatScore, apiRisk);
-        if (isProxy) threatScore = Math.max(threatScore, 50);
-        if (isHosting) threatScore = Math.max(threatScore, 20);
+    if (scamalyticsRes.ok) {
+      const data = await scamalyticsRes.json();
+      if (data.success) {
+        threatScore = data.fraud_score || 0;
+        risk = data.risk.charAt(0).toUpperCase() + data.risk.slice(1);
       }
     }
-  } catch (e) {
-    console.error("ProxyCheck error:", e);
-  }
-
-  if (url.searchParams.has("test_score")) {
-    threatScore = parseInt(url.searchParams.get("test_score")) || 0;
-  }
-
-  let risk = "Low";
-  if (threatScore > 15) risk = "Medium";
-  if (threatScore > 49) risk = "High";
+  } catch (e) {}
 
   const headers = {
     "Content-Type": "application/json",
