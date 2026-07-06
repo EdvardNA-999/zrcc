@@ -639,7 +639,7 @@ async function handleConfigPage(userID, hostName, proxyAddress) {
       .replace(/{{URL_HIDDIFY}}/g, `hiddify://install-config?url=${encodeURIComponent(subXrayUrl)}`)
       .replace(
         /{{URL_V2RAYNG}}/g,
-        `v2rayng://install-config?url=${encodeURIComponent(subXrayUrl)}#${encodedSubName}`,
+        `v2rayng://install-config?url=${subXrayUrl}#${encodedSubName}`,
       )
       .replace(
         /{{URL_CLASH}}/g,
